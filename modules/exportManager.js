@@ -917,7 +917,7 @@ if (typeof HubTools !== 'undefined') {
         let csvString = headers.join(',') + '\n';
 
         professionalsData.forEach(prof => {
-            const row = [`"${prof.nombre}"`, `"${prof.cargo}"`];
+            const row = [`"${prof.Nombre_Completo || ''}"`, `"${prof.cargo || ''}"`];
             csvString += row.join(',') + '\n';
         });
 

@@ -82,7 +82,9 @@ async function loadDatabase(file) {
                 let sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
                 if (sheetName === 'Profesionales') {
                     sheetData = sheetData.map(row => {
-                        // Check for common variations of 'cargo' and normalize to 'cargo'
+                        // ============================================================
+                        // Normalizar columna de CARGO
+                        // ============================================================
                         const cargoKey = Object.keys(row).find(key => key.toLowerCase() === 'cargo' || key.toLowerCase() === 'rol');
                         if (cargoKey && row[cargoKey] !== undefined && !row.cargo) {
                             row.cargo = row[cargoKey];
@@ -90,6 +92,25 @@ async function loadDatabase(file) {
                                 delete row[cargoKey];
                             }
                         }
+
+                        // ============================================================
+                        // Normalizar columna de NOMBRE
+                        // ============================================================
+                        const nombreKey = Object.keys(row).find(key => {
+                            const keyLower = key.toLowerCase();
+                            return keyLower.includes('nombre') ||
+                                   keyLower === 'name' ||
+                                   keyLower === 'profesional';
+                        });
+
+                        if (nombreKey && row[nombreKey] !== undefined && !row.Nombre_Completo) {
+                            row.Nombre_Completo = row[nombreKey];
+                            // Eliminar la clave original solo si es diferente
+                            if (nombreKey !== 'Nombre_Completo') {
+                                delete row[nombreKey];
+                            }
+                        }
+
                         return row;
                     });
                 }
