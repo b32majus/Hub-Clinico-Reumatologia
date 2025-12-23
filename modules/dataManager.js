@@ -3,7 +3,7 @@
 let appState = { isLoaded: false, db: null };
 
 /**
- * Guarda la base de datos en sessionStorage con manejo inteligente de tamaño
+ * Guarda la base de datos en localStorage con manejo inteligente de tamaño
  * Si la BD es demasiado grande, guarda solo una versión limitada
  */
 function saveToSessionStorage() {
@@ -13,9 +13,9 @@ function saveToSessionStorage() {
         const sizeKB = sizeBytes / 1024;
         const sizeMB = sizeKB / 1024;
 
-        // Límite conservador de 4MB (sessionStorage típicamente 5-10MB)
+        // Límite conservador de 4MB (localStorage típicamente 5-10MB)
         if (sizeKB > 4096) {
-            console.warn(`⚠️ Base de datos muy grande (${sizeMB.toFixed(2)}MB). Guardando versión limitada en sessionStorage.`);
+            console.warn(`⚠️ Base de datos muy grande (${sizeMB.toFixed(2)}MB). Guardando versión limitada en localStorage.`);
 
             // Estrategia: Guardar solo últimas 100 visitas de cada hoja
             const limitedDB = {
@@ -24,9 +24,9 @@ function saveToSessionStorage() {
                 APS: (appState.db?.APS || []).slice(-100)
             };
 
-            sessionStorage.setItem('hubClinicoDB', JSON.stringify(limitedDB));
-            sessionStorage.setItem('hubClinicoDB_limited', 'true');
-            console.log('✓ Base de datos limitada guardada en sessionStorage (últimas 100 visitas por patología).');
+            localStorage.setItem('hubClinicoDB', JSON.stringify(limitedDB));
+            localStorage.setItem('hubClinicoDB_limited', 'true');
+            console.log('✓ Base de datos limitada guardada en localStorage (últimas 100 visitas por patología).');
 
             // Advertir al usuario
             if (typeof HubTools?.utils?.mostrarNotificacion === 'function') {
@@ -36,16 +36,16 @@ function saveToSessionStorage() {
                 );
             }
         } else {
-            sessionStorage.setItem('hubClinicoDB', data);
-            sessionStorage.removeItem('hubClinicoDB_limited');
-            console.log(`✓ Base de datos completa guardada en sessionStorage (${sizeKB.toFixed(0)}KB).`);
+            localStorage.setItem('hubClinicoDB', data);
+            localStorage.removeItem('hubClinicoDB_limited');
+            console.log(`✓ Base de datos completa guardada en localStorage (${sizeKB.toFixed(0)}KB).`);
         }
     } catch (e) {
-        console.error('❌ Error al guardar la base de datos en sessionStorage:', e);
+        console.error('❌ Error al guardar la base de datos en localStorage:', e);
 
         // Si falla incluso con versión limitada, no guardar nada
-        sessionStorage.removeItem('hubClinicoDB');
-        sessionStorage.removeItem('hubClinicoDB_limited');
+        localStorage.removeItem('hubClinicoDB');
+        localStorage.removeItem('hubClinicoDB_limited');
 
         // Alertar al usuario
         if (typeof HubTools?.utils?.mostrarNotificacion === 'function') {
@@ -161,7 +161,7 @@ async function loadDatabase(file) {
         window.dispatchEvent(new CustomEvent('databaseLoaded', { detail: appState.db }));
         console.log('✓ Evento databaseLoaded disparado');
 
-        // Guardar en sessionStorage para persistencia entre páginas
+        // Guardar en localStorage para persistencia entre páginas
         saveToSessionStorage();
 
         // 6. Devuelve 'true' para indicar que la operación fue exitosa.
@@ -569,35 +569,35 @@ function extractKeyEvents(visits, pathology) {
 }
 
 /**
- * Intenta inicializar la base de datos desde sessionStorage al cargar la página.
+ * Intenta inicializar la base de datos desde localStorage al cargar la página.
  * @returns {boolean} - Devuelve 'true' si la carga fue exitosa, 'false' si no.
  */
 function initDatabaseFromStorage() {
     if (appState.isLoaded) {
-        console.log('DB ya cargada, omitiendo carga desde sessionStorage.');
+        console.log('DB ya cargada, omitiendo carga desde localStorage.');
         return true;
     }
 
     try {
-        const storedDb = sessionStorage.getItem('hubClinicoDB');
+        const storedDb = localStorage.getItem('hubClinicoDB');
         if (storedDb) {
             const dbData = JSON.parse(storedDb);
             appState.db = dbData;
             appState.isLoaded = true;
-            console.log('✓ Base de datos cargada desde sessionStorage.');
+            console.log('✓ Base de datos cargada desde localStorage.');
             
             // Disparar evento para que otros scripts sepan que los datos están listos.
             // Usamos un pequeño timeout para asegurar que los listeners de otros scripts ya estén registrados.
             setTimeout(() => {
                 window.dispatchEvent(new CustomEvent('databaseLoaded', { detail: appState.db }));
-                console.log('✓ Evento databaseLoaded disparado desde sessionStorage.');
+                console.log('✓ Evento databaseLoaded disparado desde localStorage.');
             }, 100);
 
             return true;
         }
     } catch (e) {
-        console.error('❌ Error al cargar la base de datos desde sessionStorage:', e);
-        sessionStorage.removeItem('hubClinicoDB'); // Limpiar datos corruptos
+        console.error('❌ Error al cargar la base de datos desde localStorage:', e);
+        localStorage.removeItem('hubClinicoDB'); // Limpiar datos corruptos
     }
 
     return false;
@@ -1492,7 +1492,7 @@ if (typeof window !== 'undefined') {
 
 }
 
-// Autoinicializar desde sessionStorage al cargar el script
+// Autoinicializar desde localStorage al cargar el script
 initDatabaseFromStorage();
 
 
