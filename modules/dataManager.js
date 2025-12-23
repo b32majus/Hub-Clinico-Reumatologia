@@ -291,7 +291,30 @@ function getPatientHistory(patientId) {
             const patients = appState.db?.[sheetName] || [];
             const patientVisits = patients.filter(p => p.ID_Paciente === patientId);
             patientVisits.forEach(visit => {
-                visits.push({ ...visit, pathology: sheetName.toLowerCase() });
+                // Normalizar nombres de columnas del Excel al formato esperado por el código
+                const normalizedVisit = {
+                    ...visit,
+                    pathology: sheetName.toLowerCase(),
+                    // Normalizar métricas clínicas (Excel → código)
+                    basdaiResult: visit.BASDAI_Result ?? visit.basdaiResult ?? visit.BASDAI,
+                    asdasCrpResult: visit.ASDAS_CRP_Result ?? visit.asdasCrpResult ?? visit.ASDAS,
+                    haqResult: visit.HAQ_Total ?? visit.haqResult ?? visit.HAQ,
+                    basfiResult: visit.BASFI_Result ?? visit.basfiResult ?? visit.BASFI,
+                    pcrResult: visit.PCR ?? visit.pcrResult,
+                    vsgResult: visit.VSG ?? visit.vsgResult,
+                    // Normalizar EVAs
+                    evaGlobal: visit.EVA_Global ?? visit.evaGlobal,
+                    evaDolor: visit.EVA_Dolor ?? visit.evaDolor,
+                    // Normalizar fechas
+                    fechaVisita: visit.Fecha_Visita ?? visit.fechaVisita,
+                    // Normalizar tratamiento
+                    tratamientoActual: visit.Tratamiento_Actual ?? visit.tratamientoActual,
+                    // Normalizar identificación
+                    nombrePaciente: visit.Nombre_Paciente ?? visit.nombrePaciente ?? visit.Nombre,
+                    sexoPaciente: visit.Sexo ?? visit.sexoPaciente,
+                    tipoVisita: visit.Tipo_Visita ?? visit.tipoVisita
+                };
+                visits.push(normalizedVisit);
                 if (!pathology) pathology = sheetName.toLowerCase();
             });
         });
@@ -378,15 +401,16 @@ function extractTreatmentHistory(visits) {
     for (let i = visits.length - 1; i >= 0; i--) {
         const visit = visits[i];
 
-        // Extraer tratamiento actual (puede venir de biologicoSelect, fameSelect, o sistemicoSelect)
-        let currentTreatment = visit.biologicoSelect || visit.fameSelect || visit.sistemicoSelect ||
+        // Extraer tratamiento actual - usar nombres normalizados y del Excel
+        let currentTreatment = visit.tratamientoActual || visit.Tratamiento_Actual ||
+                               visit.biologicoSelect || visit.fameSelect || visit.sistemicoSelect ||
                                visit.Biologico || visit.FAME || visit.Sistémico || null;
 
         // Si encontramos un tratamiento nuevo (diferente al anterior), registrarlo
         if (currentTreatment && !seenTreatments.has(currentTreatment)) {
             seenTreatments.add(currentTreatment);
             treatments.push({
-                startDate: visit.Fecha_Visita || visit.fechaVisita || new Date(),
+                startDate: visit.fechaVisita || visit.Fecha_Visita || new Date(),
                 name: currentTreatment,
                 reason: visit.motivoCambio || visit.comentariosAdicionales || 'Tratamiento activo'
             });
@@ -580,31 +604,803 @@ function initDatabaseFromStorage() {
 }
 
 
+// =====================================
+// FUNCIONES PARA DATOS REALES DEL EXCEL
+// =====================================
 
-function getPoblationalData(filters = {}) {
-    // Usar la función mock para poblar el dashboard de estadísticas
-    if (typeof getMockPoblationalData === 'function') {
-        return getMockPoblationalData(filters);
-    } else {
-        console.error('❌ getMockPoblationalData no está definida. Asegúrate de que mockDashboardData.js esté cargado.');
-        // Devolver estructura vacía para evitar errores
-        return {
-            filteredCohort: [],
-            kpis: {
-                totalPatients: 0,
-                remissionPercent: 0,
-                highActivityPercent: 0,
-                biologicPercent: 0,
-                avgBasdai: 0
-            },
-            chartData: {
-                activity: { labels: [], datasets: [] },
-                treatment: { labels: [], datasets: [] },
-                comorbidity: { labels: [], datasets: [] },
-                correlation: { datasets: [] }
+function normalizeString(value) {
+    if (value === undefined || value === null) return '';
+    return value.toString().trim().toLowerCase();
+}
+
+function getFieldValue(record, keys) {
+    for (const key of keys) {
+        if (record[key] !== undefined && record[key] !== null && record[key] !== '') {
+            return record[key];
+        }
+    }
+    return null;
+}
+
+function getNumericFieldValue(record, keys) {
+    const value = getFieldValue(record, keys);
+    if (value === null) return null;
+    const parsed = parseFloat(value);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function parseFilterDate(value) {
+    if (!value) return null;
+    const parsed = parseVisitDate(value.toString());
+    if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+}
+
+function getVisitDateValue(record) {
+    const dateValue = getFieldValue(record, ['Fecha_Visita', 'fechaVisita']);
+    if (!dateValue) return null;
+    const parsed = parseVisitDate(dateValue.toString());
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+}
+
+function normalizeYesNo(value) {
+    const normalized = normalizeString(value);
+    if (!normalized) return null;
+
+    if (['si', 's', 'true', '1', 'positivo', 'positive', 'pos'].includes(normalized)) {
+        return true;
+    }
+    if (['no', 'false', '0', 'negativo', 'negative', 'neg'].includes(normalized)) {
+        return false;
+    }
+
+    return null;
+}
+
+function getAgeValue(record) {
+    const directAge = getNumericFieldValue(record, ['Edad', 'edad']);
+    if (directAge !== null) return directAge;
+
+    const birthDate = getFieldValue(record, [
+        'Fecha_Nacimiento', 'fechaNacimiento', 'fecha_nacimiento', 'Nacimiento'
+    ]);
+    if (!birthDate) return null;
+
+    if (typeof HubTools?.utils?.calcularEdad === 'function') {
+        const age = HubTools.utils.calcularEdad(birthDate.toString());
+        return typeof age === 'number' && !Number.isNaN(age) ? age : null;
+    }
+
+    const parsedBirth = parseVisitDate(birthDate.toString());
+    if (Number.isNaN(parsedBirth.getTime())) return null;
+
+    const today = new Date();
+    let age = today.getFullYear() - parsedBirth.getFullYear();
+    const monthDiff = today.getMonth() - parsedBirth.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < parsedBirth.getDate())) {
+        age -= 1;
+    }
+    return age;
+}
+
+const METRIC_FIELDS = {
+    BASDAI: ['BASDAI_Result', 'BASDAI', 'basdaiResult', 'basdai'],
+    ASDAS: ['ASDAS_CRP_Result', 'ASDAS', 'asdasCrpResult', 'asdas'],
+    HAQ: ['HAQ_Total', 'HAQ', 'haqResult', 'haq'],
+    PCR: ['PCR', 'pcrResult', 'pcr'],
+    VSG: ['VSG', 'vsgResult', 'vsg'],
+    EVA_DOLOR: ['EVA_Dolor', 'evaDolor', 'eva_dolor'],
+    EVA_GLOBAL: ['EVA_Global', 'evaGlobal', 'eva_global']
+};
+
+function resolveMetricKey(metricLabel) {
+    const normalized = normalizeString(metricLabel).replace(/\s+/g, '');
+    if (normalized === 'basdai') return 'BASDAI';
+    if (normalized === 'asdas') return 'ASDAS';
+    if (normalized === 'haq') return 'HAQ';
+    if (normalized === 'pcr') return 'PCR';
+    if (normalized === 'vsg') return 'VSG';
+    if (normalized === 'evadolor') return 'EVA_DOLOR';
+    if (normalized === 'evaglobal') return 'EVA_GLOBAL';
+    return null;
+}
+
+function getMetricValue(record, metricLabel) {
+    const key = resolveMetricKey(metricLabel);
+    if (!key || !METRIC_FIELDS[key]) return null;
+    return getNumericFieldValue(record, METRIC_FIELDS[key]);
+}
+
+const ACTIVITY_THRESHOLDS = {
+    BASDAI: { remission: 2, low: 4, moderate: 6 },
+    ASDAS: { remission: 1.3, low: 2.1, moderate: 3.5 },
+    HAQ: { remission: 0.5, low: 1.5, moderate: 2 },
+    PCR: { remission: 5, low: 10, moderate: 20 },
+    VSG: { remission: 20, low: 40, moderate: 60 }
+};
+
+function getActivityBucket(metricLabel, value) {
+    const metricKey = resolveMetricKey(metricLabel);
+    if (!metricKey || value === null || value === undefined) return null;
+
+    const thresholds = ACTIVITY_THRESHOLDS[metricKey];
+    if (!thresholds) return null;
+
+    if (value < thresholds.remission) return 'Remision';
+    if (value < thresholds.low) return 'Baja Actividad';
+    if (value < thresholds.moderate) return 'Moderada Actividad';
+    return 'Alta Actividad';
+}
+
+function getBiomarkerStatus(record, markerKey) {
+    const markerMap = {
+        hla: ['HLA_B27', 'HLA-B27', 'hlaB27', 'hla'],
+        fr: ['FR', 'fr'],
+        apcc: ['APCC', 'aPCC', 'apcc']
+    };
+    const value = getFieldValue(record, markerMap[markerKey] || []);
+    return normalizeYesNo(value);
+}
+
+function getTreatmentText(record) {
+    return normalizeString(record.Tratamiento_Actual || record.tratamientoActual || '');
+}
+
+function getTreatmentCategory(record) {
+    const text = getTreatmentText(record);
+    if (!text) return 'other';
+
+    const biologicKeys = [
+        'biolog', 'anti-tnf', 'adalimumab', 'etanercept', 'infliximab',
+        'golimumab', 'certolizumab', 'secukinumab', 'ixekizumab',
+        'ustekinumab', 'guselkumab', 'risankizumab', 'tofacitinib', 'upadacitinib'
+    ];
+    if (biologicKeys.some(key => text.includes(key))) return 'biologic';
+
+    const fameKeys = ['fame', 'metotrexato', 'leflunomida', 'sulfasalazina', 'ciclosporina', 'azatioprina'];
+    if (fameKeys.some(key => text.includes(key))) return 'fame';
+
+    const systemicKeys = ['sistemic', 'aine', 'ibuprofeno', 'naproxeno', 'diclofenaco', 'indometacina', 'etoricoxib'];
+    if (systemicKeys.some(key => text.includes(key))) return 'systemic';
+
+    return 'other';
+}
+
+const COMORBIDITY_FIELDS = {
+    HTA: ['Comorbilidad_HTA', 'comorbilidad_hta'],
+    DM: ['Comorbilidad_DM', 'comorbilidad_dm'],
+    DLP: ['Comorbilidad_DLP', 'comorbilidad_dlp'],
+    ECV: ['Comorbilidad_ECV', 'comorbilidad_ecv'],
+    GASTRITIS: ['Comorbilidad_Gastritis', 'comorbilidad_gastritis'],
+    OBESIDAD: ['Comorbilidad_Obesidad', 'comorbilidad_obesidad'],
+    OSTEOPOROSIS: ['Comorbilidad_Osteoporosis', 'comorbilidad_osteoporosis'],
+    GOTA: ['Comorbilidad_Gota', 'comorbilidad_gota']
+};
+
+const EXTRA_ARTICULAR_FIELDS = {
+    DIGESTIVA: ['ExtraArticular_Digestiva', 'extraArticularDigestiva'],
+    UVEITIS: ['ExtraArticular_Uveitis', 'extraArticularUveitis'],
+    PSORIASIS: ['ExtraArticular_Psoriasis', 'extraArticularPsoriasis']
+};
+
+function isFieldPositive(record, fieldKeys) {
+    return normalizeYesNo(getFieldValue(record, fieldKeys)) === true;
+}
+
+function hasAdverseEffect(record) {
+    const effect = normalizeYesNo(getFieldValue(record, ['Cambio_Efectos_Adversos', 'efectosAdversos', 'adverseEvents']));
+    if (effect === true) return true;
+
+    const description = getFieldValue(record, ['Cambio_Descripcion_Efectos', 'descripcionEfectos']);
+    return normalizeString(description) !== '';
+}
+
+function applyFiltersToPatients(patients, filters) {
+    console.log('?? Aplicando filtros a', patients.length, 'pacientes');
+    console.log('?? Filtros activos:', filters);
+
+    const normalizedPathology = normalizeString(filters.pathology);
+    const normalizedSex = normalizeString(filters.sex);
+    const dateFrom = parseFilterDate(filters.dateFrom);
+    const dateTo = parseFilterDate(filters.dateTo);
+    if (dateFrom) dateFrom.setHours(0, 0, 0, 0);
+    if (dateTo) dateTo.setHours(23, 59, 59, 999);
+
+    const ageFrom = parseInt(filters.ageFrom, 10);
+    const ageTo = parseInt(filters.ageTo, 10);
+    const applyAgeFrom = !Number.isNaN(ageFrom);
+    const applyAgeTo = !Number.isNaN(ageTo);
+
+    const activityState = filters.activityState && filters.activityState !== 'Todos' ? filters.activityState : null;
+    const activityIndex = filters.activityIndex || 'BASDAI';
+    const evaDolorLimit = parseFloat(filters.evaDolor);
+    const evaGlobalLimit = parseFloat(filters.evaGlobal);
+    const applyEvaDolor = !Number.isNaN(evaDolorLimit) && evaDolorLimit < 10;
+    const applyEvaGlobal = !Number.isNaN(evaGlobalLimit) && evaGlobalLimit < 10;
+
+    const biomarkerFilter = filters.biomarker || '';
+    const ttoTypeFilter = normalizeString(filters.ttoType);
+    const ttoSpecificFilter = normalizeString(filters.ttoSpecific);
+    const comorbidityFilter = (filters.comorbidity || '').toString().trim().toUpperCase();
+    const extraArticularFilter = (filters.extraArticular || '').toString().trim().toUpperCase();
+    const adverseEffectOnly = !!filters.adverseEffect;
+
+    const result = patients.filter(p => {
+        if (normalizedPathology && !['all', 'todos'].includes(normalizedPathology)) {
+            const pathologyValue = normalizeString(p.pathology || p.Diagnostico_Primario || p.diagnosticoPrimario);
+            if (!pathologyValue || pathologyValue !== normalizedPathology) return false;
+        }
+
+        if (dateFrom || dateTo) {
+            const visitDate = getVisitDateValue(p);
+            if (!visitDate) return false;
+            if (dateFrom && visitDate < dateFrom) return false;
+            if (dateTo && visitDate > dateTo) return false;
+        }
+
+        if (normalizedSex && !['all', 'todos'].includes(normalizedSex)) {
+            const sexValue = normalizeString(p.Sexo || p.sexoPaciente || p.sexo);
+            if (!sexValue || sexValue !== normalizedSex) return false;
+        }
+
+        if (applyAgeFrom || applyAgeTo) {
+            const ageValue = getAgeValue(p);
+            if (ageValue === null) return false;
+            if (applyAgeFrom && ageValue < ageFrom) return false;
+            if (applyAgeTo && ageValue > ageTo) return false;
+        }
+
+        if (biomarkerFilter && biomarkerFilter !== 'Todos') {
+            const parts = biomarkerFilter.split('_');
+            const markerRaw = parts[0] || '';
+            const stateRaw = parts[1] || '';
+            const markerKey = normalizeString(markerRaw).replace(/[^a-z0-9]/g, '');
+            const expectedPositive = normalizeString(stateRaw).includes('positive');
+            let status = null;
+
+            if (markerKey.includes('hlab27') || markerKey === 'hla') {
+                status = getBiomarkerStatus(p, 'hla');
+            } else if (markerKey === 'fr') {
+                status = getBiomarkerStatus(p, 'fr');
+            } else if (markerKey === 'apcc') {
+                status = getBiomarkerStatus(p, 'apcc');
             }
+
+            if (status === null || status !== expectedPositive) return false;
+        }
+
+        if (activityState) {
+            const metricValue = getMetricValue(p, activityIndex);
+            const bucket = getActivityBucket(activityIndex, metricValue);
+            if (!bucket || bucket !== activityState) return false;
+        }
+
+        if (applyEvaDolor) {
+            const evaDolorValue = getMetricValue(p, 'EVA Dolor');
+            if (evaDolorValue === null || evaDolorValue > evaDolorLimit) return false;
+        }
+        if (applyEvaGlobal) {
+            const evaGlobalValue = getMetricValue(p, 'EVA Global');
+            if (evaGlobalValue === null || evaGlobalValue > evaGlobalLimit) return false;
+        }
+
+        if (ttoTypeFilter && ttoTypeFilter !== 'todos') {
+            const typeMap = { fames: 'fame', biologicos: 'biologic', sistemicos: 'systemic' };
+            const expectedCategory = typeMap[ttoTypeFilter];
+            const category = getTreatmentCategory(p);
+            if (expectedCategory && category !== expectedCategory) return false;
+        }
+
+        if (ttoSpecificFilter && ttoSpecificFilter !== 'todos') {
+            const treatmentText = getTreatmentText(p);
+            if (!treatmentText || !treatmentText.includes(ttoSpecificFilter)) return false;
+        }
+
+        if (comorbidityFilter && comorbidityFilter !== 'TODOS') {
+            const fieldKeys = COMORBIDITY_FIELDS[comorbidityFilter];
+            if (!fieldKeys || !isFieldPositive(p, fieldKeys)) return false;
+        }
+
+        if (extraArticularFilter && extraArticularFilter !== 'TODOS') {
+            const fieldKeys = EXTRA_ARTICULAR_FIELDS[extraArticularFilter];
+            if (!fieldKeys || !isFieldPositive(p, fieldKeys)) return false;
+        }
+
+        if (adverseEffectOnly && !hasAdverseEffect(p)) return false;
+
+        return true;
+    });
+
+    console.log('?? Despues de filtros:', result.length, 'pacientes');
+    return result;
+}
+
+/**
+ * Calcula KPIs según la patología seleccionada
+ * - ESPA: usa BASDAI como métrica principal (remisión < 2, alta >= 4)
+ * - APS: usa HAQ como métrica principal (remisión < 0.5, alta >= 2)
+ * @param {Array} patients - Array de pacientes filtrados
+ * @param {string} pathologyFilter - Patología seleccionada ('ESPA', 'APS', 'Todos')
+ */
+function calculateRealKPIs(patients, pathologyFilter = 'Todos') {
+    const total = patients.length;
+    if (total === 0) {
+        return {
+            totalPatients: 0,
+            remissionPercent: 0,
+            highActivityPercent: 0,
+            biologicPercent: 0,
+            avgActivity: 0,
+            activityLabel: 'BASDAI',
+            // Métricas adicionales por patología
+            metrics: {}
         };
     }
+
+    let remission = 0, highActivity = 0, biologicCount = 0;
+    let activitySum = 0, activityCount = 0;
+    let activityLabel = 'BASDAI';
+
+    // Acumuladores para métricas específicas por patología
+    const metricsAcc = {
+        BASDAI: { sum: 0, count: 0 },
+        ASDAS: { sum: 0, count: 0 },
+        HAQ: { sum: 0, count: 0 },
+        RAPID3: { sum: 0, count: 0 },
+        EVA_Dolor: { sum: 0, count: 0 },
+        EVA_Global: { sum: 0, count: 0 },
+        PCR: { sum: 0, count: 0 },
+        VSG: { sum: 0, count: 0 },
+        PASI: { sum: 0, count: 0 },
+        LEI: { sum: 0, count: 0 }
+    };
+
+    patients.forEach(p => {
+        const patientPathology = p.pathology || '';
+
+        // Extraer métricas usando nombres EXACTOS del Excel
+        const basdai = parseFloat(p.BASDAI_Result) || null;
+        const asdas = parseFloat(p.ASDAS_CRP_Result) || null;
+        const haq = parseFloat(p.HAQ_Total) || null;
+        const rapid3 = parseFloat(p.RAPID3_Score) || null;
+        const evaDolor = parseFloat(p.EVA_Dolor) || null;
+        const evaGlobal = parseFloat(p.EVA_Global) || null;
+        const pcr = parseFloat(p.PCR) || null;
+        const vsg = parseFloat(p.VSG) || null;
+        const pasi = parseFloat(p.PASI_Score) || null;
+        const lei = parseFloat(p.LEI_Score) || null;
+
+        // Acumular métricas para promedios
+        if (basdai !== null && !isNaN(basdai)) { metricsAcc.BASDAI.sum += basdai; metricsAcc.BASDAI.count++; }
+        if (asdas !== null && !isNaN(asdas)) { metricsAcc.ASDAS.sum += asdas; metricsAcc.ASDAS.count++; }
+        if (haq !== null && !isNaN(haq)) { metricsAcc.HAQ.sum += haq; metricsAcc.HAQ.count++; }
+        if (rapid3 !== null && !isNaN(rapid3)) { metricsAcc.RAPID3.sum += rapid3; metricsAcc.RAPID3.count++; }
+        if (evaDolor !== null && !isNaN(evaDolor)) { metricsAcc.EVA_Dolor.sum += evaDolor; metricsAcc.EVA_Dolor.count++; }
+        if (evaGlobal !== null && !isNaN(evaGlobal)) { metricsAcc.EVA_Global.sum += evaGlobal; metricsAcc.EVA_Global.count++; }
+        if (pcr !== null && !isNaN(pcr)) { metricsAcc.PCR.sum += pcr; metricsAcc.PCR.count++; }
+        if (vsg !== null && !isNaN(vsg)) { metricsAcc.VSG.sum += vsg; metricsAcc.VSG.count++; }
+        if (pasi !== null && !isNaN(pasi)) { metricsAcc.PASI.sum += pasi; metricsAcc.PASI.count++; }
+        if (lei !== null && !isNaN(lei)) { metricsAcc.LEI.sum += lei; metricsAcc.LEI.count++; }
+
+        // Determinar métrica principal según patología del paciente
+        let activityValue = null;
+        if (patientPathology === 'ESPA') {
+            activityValue = basdai;
+            activityLabel = 'BASDAI';
+        } else if (patientPathology === 'APS') {
+            activityValue = haq;
+            activityLabel = 'HAQ';
+        }
+
+        // Si el filtro es específico, usar la métrica correspondiente
+        if (pathologyFilter === 'ESPA') {
+            activityValue = basdai;
+            activityLabel = 'BASDAI';
+        } else if (pathologyFilter === 'APS') {
+            activityValue = haq;
+            activityLabel = 'HAQ';
+        }
+
+        if (activityValue !== null && !isNaN(activityValue)) {
+            activitySum += activityValue;
+            activityCount++;
+
+            // Umbrales según patología del paciente
+            if (patientPathology === 'ESPA') {
+                // BASDAI: remisión < 2, alta >= 4
+                if (basdai !== null && basdai < 2) remission++;
+                if (basdai !== null && basdai >= 4) highActivity++;
+            } else if (patientPathology === 'APS') {
+                // HAQ: remisión < 0.5, alta >= 2
+                if (haq !== null && haq < 0.5) remission++;
+                if (haq !== null && haq >= 2) highActivity++;
+            }
+        }
+
+        // Detectar biológico - usar Tratamiento_Actual del Excel
+        const tto = (p.Tratamiento_Actual || '').toLowerCase();
+        if (tto.includes('biolog') || tto.includes('anti-tnf') || tto.includes('secukinumab') ||
+            tto.includes('adalimumab') || tto.includes('etanercept') || tto.includes('infliximab') ||
+            tto.includes('golimumab') || tto.includes('certolizumab') || tto.includes('ustekinumab') ||
+            tto.includes('ixekizumab') || tto.includes('guselkumab') || tto.includes('risankizumab') ||
+            tto.includes('tofacitinib') || tto.includes('upadacitinib')) {
+            biologicCount++;
+        }
+    });
+
+    // Calcular promedios de métricas
+    const metrics = {};
+    Object.entries(metricsAcc).forEach(([key, acc]) => {
+        metrics[key] = acc.count > 0 ? (acc.sum / acc.count).toFixed(2) : null;
+    });
+
+    console.log('📊 KPIs calculados:', {
+        total, activityCount, remission, highActivity, biologicCount,
+        activityLabel, avgActivity: activityCount > 0 ? (activitySum / activityCount).toFixed(1) : 0
+    });
+
+    return {
+        totalPatients: total,
+        remissionPercent: activityCount > 0 ? Math.round((remission / activityCount) * 100) : 0,
+        highActivityPercent: activityCount > 0 ? Math.round((highActivity / activityCount) * 100) : 0,
+        biologicPercent: Math.round((biologicCount / total) * 100),
+        avgActivity: activityCount > 0 ? parseFloat((activitySum / activityCount).toFixed(1)) : 0,
+        activityLabel: activityLabel,
+        metrics: metrics
+    };
+}
+
+/**
+ * Genera datos para gráficos según la patología
+ * - Donut de actividad: usa BASDAI (ESPA) o HAQ (APS)
+ * - Barras de tratamiento: top 10 tratamientos
+ * - Barras de comorbilidades: cuenta de cada comorbilidad
+ * - Scatter de correlación: según ejes seleccionados
+ */
+function generateRealChartData(patients, filters = {}) {
+    const pathologyFilter = filters.pathology || 'Todos';
+
+    // Debug: mostrar columnas disponibles en primer paciente
+    if (patients.length > 0) {
+        console.log('📊 Columnas del primer paciente:', Object.keys(patients[0]).slice(0, 20));
+        console.log('📊 Valores de métricas del primer paciente:', {
+            BASDAI_Result: patients[0].BASDAI_Result,
+            HAQ_Total: patients[0].HAQ_Total,
+            ASDAS_CRP_Result: patients[0].ASDAS_CRP_Result,
+            pathology: patients[0].pathology
+        });
+    }
+
+    // =====================
+    // GRÁFICO DE ACTIVIDAD (Donut)
+    // =====================
+    const activityCounts = { remission: 0, low: 0, moderate: 0, high: 0 };
+    let activityLabel = 'BASDAI';
+
+    patients.forEach(p => {
+        const patientPathology = p.pathology || '';
+        let activityValue = null;
+
+        // Usar la métrica correcta según patología
+        if (patientPathology === 'ESPA' || pathologyFilter === 'ESPA') {
+            // ESPA: usar BASDAI_Result
+            activityValue = parseFloat(p.BASDAI_Result);
+            activityLabel = 'BASDAI';
+
+            if (!isNaN(activityValue) && activityValue >= 0) {
+                // Umbrales BASDAI: remisión < 2, baja < 4, moderada < 6, alta >= 6
+                if (activityValue < 2) activityCounts.remission++;
+                else if (activityValue < 4) activityCounts.low++;
+                else if (activityValue < 6) activityCounts.moderate++;
+                else activityCounts.high++;
+            }
+        } else if (patientPathology === 'APS' || pathologyFilter === 'APS') {
+            // APS: usar HAQ_Total
+            activityValue = parseFloat(p.HAQ_Total);
+            activityLabel = 'HAQ';
+
+            if (!isNaN(activityValue) && activityValue >= 0) {
+                // Umbrales HAQ: remisión < 0.5, baja < 1.5, moderada < 2, alta >= 2
+                if (activityValue < 0.5) activityCounts.remission++;
+                else if (activityValue < 1.5) activityCounts.low++;
+                else if (activityValue < 2) activityCounts.moderate++;
+                else activityCounts.high++;
+            }
+        } else {
+            // Mixto: intentar BASDAI primero, luego HAQ
+            activityValue = parseFloat(p.BASDAI_Result);
+            if (!isNaN(activityValue) && activityValue >= 0) {
+                if (activityValue < 2) activityCounts.remission++;
+                else if (activityValue < 4) activityCounts.low++;
+                else if (activityValue < 6) activityCounts.moderate++;
+                else activityCounts.high++;
+            } else {
+                activityValue = parseFloat(p.HAQ_Total);
+                if (!isNaN(activityValue) && activityValue >= 0) {
+                    if (activityValue < 0.5) activityCounts.remission++;
+                    else if (activityValue < 1.5) activityCounts.low++;
+                    else if (activityValue < 2) activityCounts.moderate++;
+                    else activityCounts.high++;
+                }
+            }
+        }
+    });
+
+    console.log('📊 Activity counts (donut):', activityCounts, 'usando', activityLabel);
+
+    // =====================
+    // GRÁFICO DE TRATAMIENTOS (Barras)
+    // =====================
+    const treatmentCounts = {};
+    patients.forEach(p => {
+        let tto = p.Tratamiento_Actual || 'Sin tratamiento';
+        if (typeof tto === 'string' && tto.length > 25) tto = tto.substring(0, 22) + '...';
+        treatmentCounts[tto] = (treatmentCounts[tto] || 0) + 1;
+    });
+
+    const sortedTreatments = Object.entries(treatmentCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+
+    let treatmentLabels = sortedTreatments.map(t => t[0]);
+    let treatmentValues = sortedTreatments.map(t => t[1]);
+    let treatmentColors = sortedTreatments.map((_, i) => {
+        const opacity = 1 - (i * 0.08);
+        return `rgba(99, 102, 241, ${Math.max(0.3, opacity)})`;
+    });
+
+    if (!treatmentLabels.length) {
+        treatmentLabels = ['Sin datos'];
+        treatmentValues = [0];
+        treatmentColors = ['#94a3b8'];
+    }
+
+    console.log('📊 Treatment counts (barras):', treatmentLabels.length, 'tratamientos');
+
+    // =====================
+    // GRÁFICO DE COMORBILIDADES (Barras)
+    // =====================
+    const comorbidityCounts = {};
+    const comorbidityLabelsMap = {
+        HTA: 'Hipertensión',
+        DM: 'Diabetes',
+        DLP: 'Dislipidemia',
+        ECV: 'Enf. Cardiovascular',
+        GASTRITIS: 'Gastritis',
+        OBESIDAD: 'Obesidad',
+        OSTEOPOROSIS: 'Osteoporosis',
+        GOTA: 'Gota'
+    };
+
+    Object.keys(COMORBIDITY_FIELDS).forEach(key => {
+        comorbidityCounts[key] = 0;
+    });
+
+    patients.forEach(p => {
+        Object.entries(COMORBIDITY_FIELDS).forEach(([label, fields]) => {
+            if (isFieldPositive(p, fields)) {
+                comorbidityCounts[label] += 1;
+            }
+        });
+    });
+
+    const comorbiditySorted = Object.entries(comorbidityCounts)
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8);
+
+    const comorbidityLabels = comorbiditySorted.length
+        ? comorbiditySorted.map(item => comorbidityLabelsMap[item[0]] || item[0])
+        : ['Sin datos'];
+    const comorbidityValues = comorbiditySorted.length
+        ? comorbiditySorted.map(item => item[1])
+        : [0];
+
+    const comorbidityColors = comorbiditySorted.map((_, i) => {
+        const opacity = 1 - (i * 0.1);
+        return `rgba(139, 92, 246, ${Math.max(0.3, opacity)})`;
+    });
+
+    console.log('📊 Comorbidity counts:', comorbidityLabels.length, 'comorbilidades');
+
+    // =====================
+    // GRÁFICO DE CORRELACIÓN (Scatter)
+    // =====================
+    const scatterX = filters.scatterX || 'BASDAI';
+    const scatterY = filters.scatterY || 'ASDAS';
+
+    // Mapeo de nombres a columnas Excel exactas
+    const metricColumnMap = {
+        'BASDAI': 'BASDAI_Result',
+        'ASDAS': 'ASDAS_CRP_Result',
+        'HAQ': 'HAQ_Total',
+        'RAPID3': 'RAPID3_Score',
+        'EVA Dolor': 'EVA_Dolor',
+        'EVA_Dolor': 'EVA_Dolor',
+        'EVA Global': 'EVA_Global',
+        'EVA_Global': 'EVA_Global',
+        'PCR': 'PCR',
+        'VSG': 'VSG',
+        'PASI': 'PASI_Score',
+        'LEI': 'LEI_Score'
+    };
+
+    const xColumn = metricColumnMap[scatterX] || scatterX;
+    const yColumn = metricColumnMap[scatterY] || scatterY;
+
+    const correlationData = patients
+        .map(p => {
+            const xValue = parseFloat(p[xColumn]);
+            const yValue = parseFloat(p[yColumn]);
+            if (isNaN(xValue) || isNaN(yValue)) return null;
+            if (xValue === 0 && yValue === 0) return null; // Excluir puntos 0,0
+            return { x: xValue, y: yValue };
+        })
+        .filter(Boolean)
+        .slice(0, 100);
+
+    console.log('📊 Correlation data:', correlationData.length, 'puntos para', scatterX, 'vs', scatterY);
+
+    // Si no hay datos, añadir punto placeholder
+    if (correlationData.length === 0) {
+        correlationData.push({ x: 0, y: 0 });
+    }
+
+    return {
+        activity: {
+            labels: ['Remisión', 'Baja', 'Moderada', 'Alta'],
+            datasets: [{
+                data: [activityCounts.remission, activityCounts.low, activityCounts.moderate, activityCounts.high],
+                backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444']
+            }],
+            activityLabel: activityLabel
+        },
+        treatment: {
+            labels: treatmentLabels,
+            datasets: [{
+                data: treatmentValues,
+                backgroundColor: treatmentColors
+            }]
+        },
+        comorbidity: {
+            labels: comorbidityLabels,
+            datasets: [{
+                data: comorbidityValues,
+                backgroundColor: comorbidityColors
+            }]
+        },
+        correlation: {
+            datasets: [{
+                data: correlationData,
+                label: `${scatterX} vs ${scatterY}`
+            }],
+            xLabel: scatterX,
+            yLabel: scatterY
+        }
+    };
+}
+
+/**
+ * Obtiene datos poblacionales reales del Excel
+ * Normaliza las columnas y calcula KPIs según la patología seleccionada
+ */
+function getRealPoblationalData(filters = {}) {
+    if (!appState.isLoaded || !appState.db) {
+        console.warn('⚠️ Base de datos no cargada para estadísticas poblacionales');
+        return { filteredCohort: [], kpis: null, chartData: null };
+    }
+
+    const pathologyFilter = filters.pathology || 'Todos';
+    console.log('📊 getRealPoblationalData - Filtro patología:', pathologyFilter);
+
+    // 1. Obtener pacientes según filtro de patología
+    let allPatients = [];
+    const sheetsToProcess = pathologyFilter === 'Todos' || !pathologyFilter
+        ? ['ESPA', 'APS']
+        : [pathologyFilter];
+
+    sheetsToProcess.forEach(sheetName => {
+        if (appState.db?.[sheetName]) {
+            console.log(`📊 Procesando hoja ${sheetName}: ${appState.db[sheetName].length} registros`);
+
+            appState.db[sheetName].forEach(visit => {
+                // Mantener TODAS las columnas originales del Excel + añadir normalización
+                const normalizedVisit = {
+                    ...visit,  // Mantener todas las columnas originales
+                    pathology: sheetName,
+                    // Normalizar solo para la tabla de pacientes (campos de visualización)
+                    _id: visit.ID_Paciente || '',
+                    _nombre: visit.Nombre_Paciente || '',
+                    _sexo: visit.Sexo || '',
+                    _fecha: visit.Fecha_Visita || '',
+                    _tratamiento: visit.Tratamiento_Actual || 'Sin tratamiento'
+                };
+                allPatients.push(normalizedVisit);
+            });
+        }
+    });
+
+    console.log(`📊 Total pacientes cargados: ${allPatients.length}`);
+
+    // Debug: mostrar columnas del primer paciente
+    if (allPatients.length > 0) {
+        const firstPatient = allPatients[0];
+        console.log('📊 Columnas disponibles:', Object.keys(firstPatient).slice(0, 15));
+        console.log('📊 Valores de métricas (primer paciente):', {
+            BASDAI_Result: firstPatient.BASDAI_Result,
+            ASDAS_CRP_Result: firstPatient.ASDAS_CRP_Result,
+            HAQ_Total: firstPatient.HAQ_Total,
+            EVA_Dolor: firstPatient.EVA_Dolor,
+            Tratamiento_Actual: firstPatient.Tratamiento_Actual,
+            pathology: firstPatient.pathology
+        });
+    }
+
+    // 2. Aplicar filtros
+    let filteredCohort = applyFiltersToPatients(allPatients, filters);
+    console.log(`📊 Después de filtros: ${filteredCohort.length} pacientes`);
+
+    // 3. Calcular KPIs pasando el filtro de patología
+    const kpis = calculateRealKPIs(filteredCohort, pathologyFilter);
+
+    // 4. Generar datos para gráficos
+    const chartData = generateRealChartData(filteredCohort, filters);
+
+    // Debug: verificar datos para tabla
+    console.log('📊 Datos para tabla:', {
+        total: filteredCohort.length,
+        primero: filteredCohort[0] ? {
+            ID_Paciente: filteredCohort[0].ID_Paciente || filteredCohort[0]._id,
+            Nombre: filteredCohort[0].Nombre_Paciente || filteredCohort[0]._nombre,
+            pathology: filteredCohort[0].pathology,
+            BASDAI_Result: filteredCohort[0].BASDAI_Result,
+            HAQ_Total: filteredCohort[0].HAQ_Total
+        } : null
+    });
+
+    return { filteredCohort, kpis, chartData };
+}
+
+function getPoblationalData(filters = {}) {
+    console.log('📊 getPoblationalData llamado con filtros:', JSON.stringify(filters));
+
+    // PRIMERO: Intentar usar datos reales del Excel cargado
+    if (appState.isLoaded && appState.db) {
+        console.log('📊 Base de datos cargada, obteniendo datos reales...');
+        const realData = getRealPoblationalData(filters);
+        console.log('📊 Datos reales obtenidos:', realData.filteredCohort.length, 'registros');
+        // Siempre devolver datos reales si la base está cargada (incluso si filteredCohort está vacío)
+        return realData;
+    }
+
+    // FALLBACK: Usar mock si está habilitado y la base de datos no está cargada
+    if (typeof getMockPoblationalData === 'function') {
+        console.log('📊 Base de datos no cargada, intentando mock...');
+        const mockData = getMockPoblationalData(filters);
+        if (mockData && mockData.filteredCohort && mockData.filteredCohort.length > 0) {
+            return mockData;
+        }
+    }
+
+    // Estructura vacía como último recurso
+    console.warn('⚠️ No hay datos disponibles para el dashboard de estadísticas');
+    return {
+        filteredCohort: [],
+        kpis: {
+            totalPatients: 0,
+            remissionPercent: 0,
+            highActivityPercent: 0,
+            biologicPercent: 0,
+            avgBasdai: 0
+        },
+        chartData: {
+            activity: { labels: ['Remisión', 'Baja', 'Moderada', 'Alta'], datasets: [{ data: [0, 0, 0, 0], backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444'] }] },
+            treatment: { labels: [], datasets: [{ data: [], backgroundColor: '#6366f1' }] },
+            comorbidity: { labels: [], datasets: [{ data: [] }] },
+            correlation: { datasets: [] }
+        }
+    };
 }
 
 
