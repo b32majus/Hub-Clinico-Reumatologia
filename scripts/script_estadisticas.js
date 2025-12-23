@@ -31,6 +31,13 @@ const COLORS = {
     border: '#E2E8F0'
 };
 
+const applyFiltersAndRefresh = () => {
+    updateActiveFiltersDisplay();
+    updateDashboard();
+};
+
+const debouncedApplyFilters = debounce(applyFiltersAndRefresh, 250);
+
 // === INICIALIZACIÓN ===
 document.addEventListener('DOMContentLoaded', () => {
     console.log('✅ Iniciando Dashboard de Estadísticas v2.0...');
@@ -48,7 +55,20 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeDatePresets();
     initializeTableControls();
     addEventListeners();
+    bindFiltersPanelResize();
+
+    // Intentar cargar el dashboard inmediatamente
     updateDashboard();
+    syncFiltersPanelHeight();
+
+    // También escuchar el evento de base de datos cargada para cuando
+    // la inicialización desde sessionStorage ocurra después
+    window.addEventListener('databaseLoaded', () => {
+        console.log('📊 Evento databaseLoaded recibido, actualizando dashboard...');
+        poblarFiltroFarmacos();
+        updateDashboard();
+        syncFiltersPanelHeight();
+    });
 });
 
 // === CONFIGURACIÓN GLOBAL DE CHART.JS ===
@@ -94,6 +114,7 @@ function initializeFilterTabs() {
                 content.classList.remove('active');
             });
             document.getElementById(`tab-${targetTab}`).classList.add('active');
+            syncFiltersPanelHeight();
         });
     });
 }
@@ -175,12 +196,6 @@ function initializeTableControls() {
 
 // === EVENT LISTENERS ===
 function addEventListeners() {
-    // Aplicar filtros
-    document.getElementById('applyFiltersBtn').addEventListener('click', () => {
-        updateDashboard();
-        updateActiveFiltersDisplay();
-    });
-
     // Limpiar filtros
     document.getElementById('clearFiltersBtn').addEventListener('click', clearAllFilters);
     document.getElementById('clearAllFiltersBtn')?.addEventListener('click', clearAllFilters);
@@ -194,18 +209,24 @@ function addEventListeners() {
         }
     });
 
+    bindAutoApplyFilters();
+
     // Sliders EVA
     const evaDolorSlider = document.getElementById('filterEVADolor');
     const evaDolorValue = document.getElementById('evaDolorValue');
     evaDolorSlider?.addEventListener('input', () => {
         evaDolorValue.textContent = evaDolorSlider.value;
+        debouncedApplyFilters();
     });
+    evaDolorSlider?.addEventListener('change', applyFiltersAndRefresh);
 
     const evaGlobalSlider = document.getElementById('filterEVAGlobal');
     const evaGlobalValue = document.getElementById('evaGlobalValue');
     evaGlobalSlider?.addEventListener('input', () => {
         evaGlobalValue.textContent = evaGlobalSlider.value;
+        debouncedApplyFilters();
     });
+    evaGlobalSlider?.addEventListener('change', applyFiltersAndRefresh);
 
     // Selectores de correlación
     document.getElementById('scatterX')?.addEventListener('change', updateDashboard);
@@ -235,9 +256,48 @@ function initializeFilters() {
     poblarFiltroFarmacos();
 }
 
+function bindAutoApplyFilters() {
+    const filterInputs = document.querySelectorAll('.filters-panel input, .filters-panel select');
+    filterInputs.forEach(input => {
+        if (input.type === 'range') {
+            return;
+        }
+
+        const handler = () => {
+            if (input.id === 'filterPathology') {
+                syncActivityIndexForPathology();
+            }
+            applyFiltersAndRefresh();
+        };
+
+        if (input.tagName === 'SELECT' || input.type === 'checkbox' || input.type === 'date') {
+            input.addEventListener('change', handler);
+            return;
+        }
+
+        input.addEventListener('input', debouncedApplyFilters);
+        input.addEventListener('change', handler);
+    });
+}
+
+function syncActivityIndexForPathology() {
+    const pathology = document.getElementById('filterPathology')?.value || '';
+    const activityIndex = document.getElementById('filterActivityIndex');
+    if (!activityIndex) return;
+
+    const current = activityIndex.value;
+    if (pathology === 'APS' && current === 'BASDAI') {
+        activityIndex.value = 'HAQ';
+    }
+    if (pathology === 'ESPA' && current === 'HAQ') {
+        activityIndex.value = 'BASDAI';
+    }
+}
+
 function poblarFiltroFarmacos() {
     const select = document.getElementById('filterTtoSpecific');
     if (!select) return;
+    if (select.options.length > 1) return;
 
     try {
         const farmacosData = HubTools?.data?.getFarmsDataFromState?.() || {};
@@ -359,6 +419,8 @@ function updateActiveFiltersDisplay() {
         countBadge.textContent = activeCount;
         countBadge.style.display = activeCount > 0 ? 'inline-flex' : 'none';
     }
+
+    syncFiltersPanelHeight();
 }
 
 function removeFilter(filterKey) {
@@ -387,7 +449,12 @@ function clearAllFilters() {
             input.selectedIndex = 0;
         } else if (input.type === 'range') {
             input.value = input.max;
-            const valueSpan = document.getElementById(input.id.replace('filter', '').toLowerCase() + 'Value');
+            const rangeTargets = {
+                filterEVADolor: 'evaDolorValue',
+                filterEVAGlobal: 'evaGlobalValue'
+            };
+            const valueSpanId = rangeTargets[input.id];
+            const valueSpan = valueSpanId ? document.getElementById(valueSpanId) : null;
             if (valueSpan) valueSpan.textContent = input.max;
         } else {
             input.value = '';
@@ -427,16 +494,97 @@ function updateDashboard() {
 function updateKPIs(kpis) {
     if (!kpis) return;
 
+    console.log('📊 Actualizando KPIs:', kpis);
+
     document.getElementById('kpiTotalPatients').textContent = kpis.totalPatients || 0;
     document.getElementById('kpiRemissionPercent').textContent = (kpis.remissionPercent || 0).toFixed(1) + '%';
     document.getElementById('kpiHighActivityPercent').textContent = (kpis.highActivityPercent || 0).toFixed(1) + '%';
     document.getElementById('kpiBiologicPercent').textContent = (kpis.biologicPercent || 0).toFixed(1) + '%';
-    document.getElementById('kpiAvgBasdai').textContent = (kpis.avgBasdai || 0).toFixed(1);
+
+    // Mostrar métrica de actividad con etiqueta correcta (BASDAI o HAQ)
+    const avgActivityEl = document.getElementById('kpiAvgActivity') || document.getElementById('kpiAvgBasdai');
+    if (avgActivityEl) {
+        const avgValue = kpis.avgActivity || kpis.avgBasdai || 0;
+        avgActivityEl.textContent = parseFloat(avgValue).toFixed(1);
+    }
+
+    // Actualizar etiqueta del KPI según patología (id en HTML es kpiActivityLabel)
+    const activityLabel = kpis.activityLabel || 'BASDAI';
+    const avgActivityLabelEl = document.getElementById('kpiActivityLabel');
+    if (avgActivityLabelEl) {
+        avgActivityLabelEl.textContent = `${activityLabel} Medio`;
+    }
+
+    // Mostrar métricas adicionales si existen
+    if (kpis.metrics) {
+        updateMetricsDisplay(kpis.metrics, kpis.activityLabel);
+    }
+}
+
+// Función auxiliar para mostrar métricas adicionales por patología
+function updateMetricsDisplay(metrics, pathologyType) {
+    const metricsContainer = document.getElementById('additionalMetrics');
+    if (!metricsContainer) return;
+
+    metricsContainer.innerHTML = '';
+
+    // Definir qué métricas mostrar según patología
+    let metricsToShow = [];
+    if (pathologyType === 'BASDAI') {
+        // ESPA: BASDAI, ASDAS, EVA Dolor, EVA Global, PCR, VSG
+        metricsToShow = [
+            { key: 'BASDAI', label: 'BASDAI', unit: '' },
+            { key: 'ASDAS', label: 'ASDAS', unit: '' },
+            { key: 'EVA_Dolor', label: 'EVA Dolor', unit: '' },
+            { key: 'EVA_Global', label: 'EVA Global', unit: '' },
+            { key: 'PCR', label: 'PCR', unit: ' mg/L' },
+            { key: 'VSG', label: 'VSG', unit: ' mm/h' }
+        ];
+    } else if (pathologyType === 'HAQ') {
+        // APS: HAQ, ASDAS, RAPID3, EVA Dolor, EVA Global, PASI, LEI, PCR, VSG
+        metricsToShow = [
+            { key: 'HAQ', label: 'HAQ', unit: '' },
+            { key: 'ASDAS', label: 'ASDAS', unit: '' },
+            { key: 'RAPID3', label: 'RAPID3', unit: '' },
+            { key: 'EVA_Dolor', label: 'EVA Dolor', unit: '' },
+            { key: 'PASI', label: 'PASI', unit: '' },
+            { key: 'LEI', label: 'LEI', unit: '' }
+        ];
+    } else {
+        // Mixto: mostrar las principales
+        metricsToShow = [
+            { key: 'BASDAI', label: 'BASDAI', unit: '' },
+            { key: 'HAQ', label: 'HAQ', unit: '' },
+            { key: 'ASDAS', label: 'ASDAS', unit: '' },
+            { key: 'EVA_Dolor', label: 'EVA Dolor', unit: '' }
+        ];
+    }
+
+    metricsToShow.forEach(metric => {
+        const value = metrics[metric.key];
+        if (value !== null && value !== undefined) {
+            const metricEl = document.createElement('div');
+            metricEl.className = 'metric-item';
+            metricEl.innerHTML = `
+                <span class="metric-label">${metric.label}:</span>
+                <span class="metric-value">${parseFloat(value).toFixed(1)}${metric.unit}</span>
+            `;
+            metricsContainer.appendChild(metricEl);
+        }
+    });
 }
 
 // === RENDERIZAR GRÁFICOS ===
 function renderCharts(chartData) {
-    if (!chartData) return;
+    console.log('📊 renderCharts llamado con:', chartData);
+
+    if (!chartData) {
+        console.warn('⚠️ chartData es null/undefined');
+        return;
+    }
+
+    console.log('📊 Activity data:', chartData.activity);
+    console.log('📊 Treatment data:', chartData.treatment);
 
     renderActivityDonutChart('activityDonutChart', chartData.activity);
     renderTreatmentBarChart('treatmentDistChart', chartData.treatment);
@@ -500,7 +648,7 @@ function renderTreatmentBarChart(canvasId, data) {
     const ctx = document.getElementById(canvasId)?.getContext('2d');
     if (!ctx) return;
 
-    const colors = [COLORS.biologic, COLORS.fame, COLORS.systemic, COLORS.other];
+    const colors = data?.datasets?.[0]?.backgroundColor || [COLORS.biologic, COLORS.fame, COLORS.systemic, COLORS.other];
 
     chartInstances[canvasId] = new Chart(ctx, {
         type: 'bar',
@@ -674,14 +822,34 @@ function renderTablePage() {
         `;
     } else {
         pageData.forEach(patient => {
+            // Usar nombres EXACTOS del Excel con fallback a campos normalizados
+            const id = patient.ID_Paciente || patient._id || '-';
+            const nombre = patient.Nombre_Paciente || patient._nombre || '-';
+            const pathology = patient.pathology || '-';
+            const fecha = patient.Fecha_Visita || patient._fecha || '';
+            const tratamiento = patient.Tratamiento_Actual || patient._tratamiento || 'Sin tratamiento';
+
+            // Mostrar métrica según patología
+            let metricValue = 'N/A';
+            let metricLabel = 'BASDAI';
+            if (pathology === 'ESPA') {
+                const basdai = parseFloat(patient.BASDAI_Result);
+                metricValue = !isNaN(basdai) ? basdai.toFixed(1) : 'N/A';
+                metricLabel = 'BASDAI';
+            } else if (pathology === 'APS') {
+                const haq = parseFloat(patient.HAQ_Total);
+                metricValue = !isNaN(haq) ? haq.toFixed(2) : 'N/A';
+                metricLabel = 'HAQ';
+            }
+
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td><strong>${patient.ID_Paciente || '-'}</strong></td>
-                <td>${patient.Nombre || '-'}</td>
-                <td><span class="pathology-badge pathology-${(patient.pathology || '').toLowerCase()}">${patient.pathology || '-'}</span></td>
-                <td>${formatDate(patient.Fecha_Visita)}</td>
-                <td>${patient.BASDAI ? patient.BASDAI.toFixed(1) : 'N/A'}</td>
-                <td>${patient.Tratamiento_Actual || 'Sin tratamiento'}</td>
+                <td><strong>${id}</strong></td>
+                <td>${nombre}</td>
+                <td><span class="pathology-badge pathology-${pathology.toLowerCase()}">${pathology}</span></td>
+                <td>${formatDate(fecha)}</td>
+                <td title="${metricLabel}">${metricValue}</td>
+                <td>${tratamiento}</td>
             `;
             tbody.appendChild(row);
         });
@@ -775,11 +943,17 @@ function filterTableBySearch(searchTerm) {
         filteredCohort = [...currentCohort];
     } else {
         filteredCohort = currentCohort.filter(patient => {
+            // Usar nombres EXACTOS del Excel con fallbacks
+            const id = (patient.ID_Paciente || patient._id || '').toLowerCase();
+            const nombre = (patient.Nombre_Paciente || patient._nombre || '').toLowerCase();
+            const pathology = (patient.pathology || '').toLowerCase();
+            const tratamiento = (patient.Tratamiento_Actual || patient._tratamiento || '').toLowerCase();
+
             return (
-                (patient.ID_Paciente || '').toLowerCase().includes(term) ||
-                (patient.Nombre || '').toLowerCase().includes(term) ||
-                (patient.pathology || '').toLowerCase().includes(term) ||
-                (patient.Tratamiento_Actual || '').toLowerCase().includes(term)
+                id.includes(term) ||
+                nombre.includes(term) ||
+                pathology.includes(term) ||
+                tratamiento.includes(term)
             );
         });
     }
@@ -809,4 +983,26 @@ function debounce(func, wait) {
         clearTimeout(timeout);
         timeout = setTimeout(later, wait);
     };
+}
+
+function syncFiltersPanelHeight() {
+    const header = document.getElementById('filtersHeader');
+    const content = document.querySelector('.filters-panel .collapsible-content');
+    if (!header || !content) return;
+    if (!header.classList.contains('active')) return;
+
+    requestAnimationFrame(() => {
+        content.style.maxHeight = `${content.scrollHeight}px`;
+    });
+}
+
+function bindFiltersPanelResize() {
+    const header = document.getElementById('filtersHeader');
+    if (header) {
+        header.addEventListener('click', () => {
+            setTimeout(syncFiltersPanelHeight, 60);
+        });
+    }
+
+    window.addEventListener('resize', debounce(syncFiltersPanelHeight, 150));
 }

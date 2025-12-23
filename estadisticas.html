@@ -8,8 +8,8 @@
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="style_estadisticas.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.x"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 </head>
 <body>
     <div class="hub-shell">
@@ -312,9 +312,6 @@
                         <button id="clearFiltersBtn" class="button secondary-button">
                             <i class="fas fa-eraser"></i> Limpiar Filtros
                         </button>
-                        <button id="applyFiltersBtn" class="button primary-button">
-                            <i class="fas fa-search"></i> Aplicar Filtros
-                        </button>
                     </div>
                 </div>
             </section>
@@ -331,7 +328,7 @@
                 </div>
                 <div class="kpi-card kpi-card--success">
                     <div class="kpi-icon"><i class="fas fa-check-circle"></i></div>
-                    <span class="kpi-label">En Remisión</span>
+                    <span class="kpi-label" id="kpiRemissionLabel">En Remisión</span>
                     <span id="kpiRemissionPercent" class="kpi-value">0%</span>
                     <span class="kpi-trend kpi-trend--up" id="kpiRemissionTrend">
                         <i class="fas fa-arrow-up"></i> +0%
@@ -339,7 +336,7 @@
                 </div>
                 <div class="kpi-card kpi-card--danger">
                     <div class="kpi-icon"><i class="fas fa-exclamation-circle"></i></div>
-                    <span class="kpi-label">Alta Actividad</span>
+                    <span class="kpi-label" id="kpiHighActivityLabel">Alta Actividad</span>
                     <span id="kpiHighActivityPercent" class="kpi-value">0%</span>
                     <span class="kpi-trend kpi-trend--down" id="kpiHighActivityTrend">
                         <i class="fas fa-arrow-down"></i> -0%
@@ -355,12 +352,22 @@
                 </div>
                 <div class="kpi-card kpi-card--warning">
                     <div class="kpi-icon"><i class="fas fa-chart-line"></i></div>
-                    <span class="kpi-label">BASDAI Medio</span>
-                    <span id="kpiAvgBasdai" class="kpi-value">0.0</span>
-                    <span class="kpi-trend kpi-trend--down" id="kpiBasdaiTrend">
+                    <span class="kpi-label" id="kpiActivityLabel">BASDAI Medio</span>
+                    <span id="kpiAvgActivity" class="kpi-value">0.0</span>
+                    <span class="kpi-trend kpi-trend--down" id="kpiActivityTrend">
                         <i class="fas fa-arrow-down"></i> -0.0
                     </span>
                 </div>
+                <div class="kpi-card kpi-card--info" id="kpiAsdasCard" style="display: none;">
+                    <div class="kpi-icon"><i class="fas fa-wave-square"></i></div>
+                    <span class="kpi-label">ASDAS Medio</span>
+                    <span id="kpiAvgAsdas" class="kpi-value">-</span>
+                    <span class="kpi-trend kpi-trend--neutral" id="kpiAsdasTrend">
+                        <i class="fas fa-minus"></i> Sin datos
+                    </span>
+                </div>
+                <!-- Métricas adicionales por patología -->
+                <div class="additional-metrics-container" id="additionalMetrics"></div>
             </section>
 
             <!-- Panel de Visualizaciones -->
